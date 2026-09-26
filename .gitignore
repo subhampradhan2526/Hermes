@@ -153,3 +153,8 @@ Desktop.ini
 *~
 .directory
 .Trash-*
+
+# Data and models
+data/
+*.pt
+*.mp4

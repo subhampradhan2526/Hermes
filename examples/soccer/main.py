@@ -117,10 +117,20 @@ def resolve_goalkeepers_team_id(
     the players. Then, it assigns each goalkeeper to the nearest team's centroid by
     calculating the distance between each goalkeeper and the centroids of the two teams.
     """
+    if len(goalkeepers) == 0:
+        return np.array([], dtype=int)
+
     goalkeepers_xy = goalkeepers.get_anchors_coordinates(sv.Position.BOTTOM_CENTER)
     players_xy = players.get_anchors_coordinates(sv.Position.BOTTOM_CENTER)
-    team_0_centroid = players_xy[players_team_id == 0].mean(axis=0)
-    team_1_centroid = players_xy[players_team_id == 1].mean(axis=0)
+
+    team_0_players = players_xy[players_team_id == 0]
+    team_1_players = players_xy[players_team_id == 1]
+
+    if len(team_0_players) == 0 or len(team_1_players) == 0:
+        return np.array([0] * len(goalkeepers), dtype=int)
+
+    team_0_centroid = team_0_players.mean(axis=0)
+    team_1_centroid = team_1_players.mean(axis=0)
     goalkeepers_team_id = []
     for goalkeeper_xy in goalkeepers_xy:
         dist_0 = np.linalg.norm(goalkeeper_xy - team_0_centroid)
@@ -134,27 +144,34 @@ def render_radar(
     keypoints: sv.KeyPoints,
     color_lookup: np.ndarray
 ) -> np.ndarray:
+    radar = draw_pitch(config=CONFIG)
+    if keypoints is None or len(keypoints.xy) == 0:
+        return radar
+
     mask = (keypoints.xy[0][:, 0] > 1) & (keypoints.xy[0][:, 1] > 1)
-    transformer = ViewTransformer(
-        source=keypoints.xy[0][mask].astype(np.float32),
-        target=np.array(CONFIG.vertices)[mask].astype(np.float32)
-    )
+    if mask.sum() < 4:
+        return radar
+
+    try:
+        transformer = ViewTransformer(
+            source=keypoints.xy[0][mask].astype(np.float32),
+            target=np.array(CONFIG.vertices)[mask].astype(np.float32)
+        )
+    except ValueError:
+        return radar
+
+    if len(detections) == 0:
+        return radar
+
     xy = detections.get_anchors_coordinates(anchor=sv.Position.BOTTOM_CENTER)
     transformed_xy = transformer.transform_points(points=xy)
 
-    radar = draw_pitch(config=CONFIG)
-    radar = draw_points_on_pitch(
-        config=CONFIG, xy=transformed_xy[color_lookup == 0],
-        face_color=sv.Color.from_hex(COLORS[0]), radius=20, pitch=radar)
-    radar = draw_points_on_pitch(
-        config=CONFIG, xy=transformed_xy[color_lookup == 1],
-        face_color=sv.Color.from_hex(COLORS[1]), radius=20, pitch=radar)
-    radar = draw_points_on_pitch(
-        config=CONFIG, xy=transformed_xy[color_lookup == 2],
-        face_color=sv.Color.from_hex(COLORS[2]), radius=20, pitch=radar)
-    radar = draw_points_on_pitch(
-        config=CONFIG, xy=transformed_xy[color_lookup == 3],
-        face_color=sv.Color.from_hex(COLORS[3]), radius=20, pitch=radar)
+    for team_id in range(4):
+        team_mask = color_lookup == team_id
+        if np.any(team_mask) and len(transformed_xy) > 0:
+            radar = draw_points_on_pitch(
+                config=CONFIG, xy=transformed_xy[team_mask],
+                face_color=sv.Color.from_hex(COLORS[team_id]), radius=20, pitch=radar)
     return radar
 
 
@@ -226,7 +243,7 @@ def run_ball_detection(source_video_path: str, device: str) -> Iterator[np.ndarr
 
     slicer = sv.InferenceSlicer(
         callback=callback,
-        overlap_filter_strategy=sv.OverlapFilter.NONE,
+        overlap_filter=sv.OverlapFilter.NONE,
         slice_wh=(640, 640),
     )
 
@@ -257,7 +274,7 @@ def run_player_tracking(source_video_path: str, device: str) -> Iterator[np.ndar
         detections = sv.Detections.from_ultralytics(result)
         detections = tracker.update_with_detections(detections)
 
-        labels = [str(tracker_id) for tracker_id in detections.tracker_id]
+        labels = [str(tracker_id) for tracker_id in detections.tracker_id] if detections.tracker_id is not None else []
 
         annotated_frame = frame.copy()
         annotated_frame = ELLIPSE_ANNOTATOR.annotate(annotated_frame, detections)
@@ -313,7 +330,7 @@ def run_team_classification(source_video_path: str, device: str) -> Iterator[np.
                 goalkeepers_team_id.tolist() +
                 [REFEREE_CLASS_ID] * len(referees)
         )
-        labels = [str(tracker_id) for tracker_id in detections.tracker_id]
+        labels = [str(tracker_id) for tracker_id in detections.tracker_id] if detections.tracker_id is not None else []
 
         annotated_frame = frame.copy()
         annotated_frame = ELLIPSE_ANNOTATOR.annotate(
@@ -363,7 +380,7 @@ def run_radar(source_video_path: str, device: str) -> Iterator[np.ndarray]:
             goalkeepers_team_id.tolist() +
             [REFEREE_CLASS_ID] * len(referees)
         )
-        labels = [str(tracker_id) for tracker_id in detections.tracker_id]
+        labels = [str(tracker_id) for tracker_id in detections.tracker_id] if detections.tracker_id is not None else []
 
         annotated_frame = frame.copy()
         annotated_frame = ELLIPSE_ANNOTATOR.annotate(
@@ -386,7 +403,14 @@ def run_radar(source_video_path: str, device: str) -> Iterator[np.ndarray]:
         yield annotated_frame
 
 
-def main(source_video_path: str, target_video_path: str, device: str, mode: Mode) -> None:
+def main(
+    source_video_path: str,
+    target_video_path: str,
+    device: str,
+    mode: Mode,
+    show_frame: bool = True,
+    max_frames: int = None
+) -> None:
     if mode == Mode.PITCH_DETECTION:
         frame_generator = run_pitch_detection(
             source_video_path=source_video_path, device=device)
@@ -410,13 +434,17 @@ def main(source_video_path: str, target_video_path: str, device: str, mode: Mode
 
     video_info = sv.VideoInfo.from_video_path(source_video_path)
     with sv.VideoSink(target_video_path, video_info) as sink:
-        for frame in frame_generator:
+        for i, frame in enumerate(frame_generator):
             sink.write_frame(frame)
 
-            cv2.imshow("frame", frame)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
+            if show_frame:
+                cv2.imshow("frame", frame)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+            if max_frames is not None and i + 1 >= max_frames:
                 break
-        cv2.destroyAllWindows()
+        if show_frame:
+            cv2.destroyAllWindows()
 
 
 if __name__ == '__main__':
@@ -425,10 +453,14 @@ if __name__ == '__main__':
     parser.add_argument('--target_video_path', type=str, required=True)
     parser.add_argument('--device', type=str, default='cpu')
     parser.add_argument('--mode', type=Mode, default=Mode.PLAYER_DETECTION)
+    parser.add_argument('--no_display', action='store_true', help='Disable display window')
+    parser.add_argument('--max_frames', type=int, default=None, help='Limit number of frames')
     args = parser.parse_args()
     main(
         source_video_path=args.source_video_path,
         target_video_path=args.target_video_path,
         device=args.device,
-        mode=args.mode
+        mode=args.mode,
+        show_frame=not args.no_display,
+        max_frames=args.max_frames
     )
