@@ -13,7 +13,7 @@ const robotoMono = Roboto_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Football AI Analytics",
+  title: "Hermes AI Analytics",
   description: "Advanced football computer vision and analytics platform",
 };
 

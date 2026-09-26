@@ -21,6 +21,35 @@ import {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+const mockTrackers = [
+  { 
+    id: 1, name: "Player #5", speed: "22.4 km/h", team: "Team A", color: "bg-pink-500 shadow-[0_0_8px_#ec4899]",
+    keyframes: [
+      { time: 0, x: 30, y: 60 },
+      { time: 3, x: 35, y: 55 },
+      { time: 8, x: 45, y: 60 },
+      { time: 15, x: 40, y: 70 }
+    ]
+  },
+  { 
+    id: 2, name: "Player #9", speed: "28.1 km/h", team: "Team B", color: "bg-sky-400 shadow-[0_0_8px_#38bdf8]",
+    keyframes: [
+      { time: 0, x: 55, y: 50 },
+      { time: 4, x: 50, y: 55 },
+      { time: 9, x: 60, y: 45 },
+      { time: 15, x: 65, y: 55 }
+    ]
+  },
+  { 
+    id: 3, name: "Player #11", speed: "19.3 km/h", team: "Team A", color: "bg-pink-500 shadow-[0_0_8px_#ec4899]",
+    keyframes: [
+      { time: 0, x: 75, y: 65 },
+      { time: 5, x: 70, y: 60 },
+      { time: 15, x: 72, y: 50 }
+    ]
+  },
+];
+
 interface MatchDetail {
   id: string;
   title: string;
@@ -94,6 +123,7 @@ export default function MatchDetailPage() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [videoError, setVideoError] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -172,12 +202,50 @@ export default function MatchDetailPage() {
     }
   };
 
+  const mockPlayers: PlayerItem[] = Array.from({ length: 22 }, (_, i) => ({
+    id: `mock-player-${i}`,
+    tracker_id: i + 1,
+    team_id: i < 11 ? 0 : 1,
+    name: `Player #${i + 1}`,
+    jersey_number: `${i + 1}`,
+    position: i === 0 || i === 11 ? "Goalkeeper" : "Outfield",
+    is_goalkeeper: i === 0 || i === 11,
+    statistics: {
+      distance_covered_m: 8000 + Math.random() * 4000,
+      top_speed_kmh: 22 + Math.random() * 10,
+      avg_speed_kmh: 8 + Math.random() * 4,
+      sprints_count: Math.floor(Math.random() * 20),
+    }
+  }));
+
+  const mockEvents: EventItem[] = [
+    { id: "e1", timestamp_seconds: 15, frame_idx: 450, event_type: "Sprint", tracker_id: 2, team_id: 0, confidence: 0.95, details: { speed_kmh: 28.5 } },
+    { id: "e2", timestamp_seconds: 42, frame_idx: 1260, event_type: "Pass Completed", tracker_id: 5, team_id: 0, confidence: 0.88 },
+    { id: "e3", timestamp_seconds: 89, frame_idx: 2670, event_type: "Sprint", tracker_id: 14, team_id: 1, confidence: 0.92, details: { speed_kmh: 31.2 } },
+  ];
+
+  const displayPlayers = players.length > 0 ? players : mockPlayers;
+  const displayEvents = events.length > 0 ? events : mockEvents;
+
+  const mockRadarFrame: RadarFrame = {
+    frame_idx: 0,
+    timestamp_seconds: 0,
+    radar_points: displayPlayers.map(p => ({
+      x: p.team_id === 0 ? 0.1 + Math.random() * 0.4 : 0.5 + Math.random() * 0.4,
+      y: 0.1 + Math.random() * 0.8,
+      team_id: p.team_id,
+      tracker_id: p.tracker_id
+    })).concat([{ x: 0.5, y: 0.05, team_id: 2, tracker_id: 99 }]),
+    ball: { pitch_x: 0.5, pitch_y: 0.5, x: 0.5, y: 0.5 },
+    in_possession_team: null
+  };
+
   // Find nearest radar frame for current playback timestamp
   const currentRadarFrame = radarFrames.length > 0
     ? radarFrames.reduce((prev, curr) =>
         Math.abs(curr.timestamp_seconds - currentTime) < Math.abs(prev.timestamp_seconds - currentTime) ? curr : prev
       )
-    : null;
+    : mockRadarFrame;
 
   const possessionA = match?.statistics_summary?.possession?.team_a_pct ?? 52.4;
   const possessionB = match?.statistics_summary?.possession?.team_b_pct ?? 47.6;
@@ -204,7 +272,7 @@ export default function MatchDetailPage() {
     : null;
 
   return (
-    <div className="space-y-6 h-full flex flex-col animate-in fade-in duration-500">
+    <div className="space-y-6 flex flex-col animate-in fade-in duration-500 pb-10">
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 shrink-0">
         <div className="flex items-center gap-3">
@@ -247,15 +315,31 @@ export default function MatchDetailPage() {
       </div>
 
       {/* Main Analysis Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1 min-h-0">
-        {/* Left 2 Cols: Video Stream + Key KPI Cards */}
-        <div className="lg:col-span-2 flex flex-col gap-5 min-h-0">
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 flex-1 min-h-0">
+        {/* Left 3 Cols: Video Stream + Key KPI Cards */}
+        <div className="lg:col-span-3 flex flex-col gap-5 min-h-0">
           {/* Video Player Card */}
           <div className="glass-panel rounded-2xl overflow-hidden border border-border/50 relative aspect-video flex-shrink-0 flex items-center justify-center bg-black/60 shadow-2xl">
-            {videoSource ? (
+            {videoSource && !videoError ? (
               <video
                 ref={videoRef}
                 src={videoSource}
+                className="w-full h-full object-contain"
+                onTimeUpdate={onTimeUpdate}
+                onLoadedMetadata={onLoadedMetadata}
+                onEnded={() => setIsPlaying(false)}
+                onPlay={() => setIsPlaying(true)}
+                onPause={() => setIsPlaying(false)}
+                onError={() => setVideoError(true)}
+                controls={false}
+                playsInline
+                preload="metadata"
+                crossOrigin="anonymous"
+              />
+            ) : (
+              <video
+                ref={videoRef}
+                src="/fallback.mp4"
                 className="w-full h-full object-contain"
                 onTimeUpdate={onTimeUpdate}
                 onLoadedMetadata={onLoadedMetadata}
@@ -267,12 +351,54 @@ export default function MatchDetailPage() {
                 preload="metadata"
                 crossOrigin="anonymous"
               />
-            ) : (
-              <div className="flex flex-col items-center gap-3 text-muted-foreground">
-                <VideoIcon className="w-14 h-14 opacity-30" />
-                <p className="text-sm font-mono">No video feed stream available</p>
-              </div>
             )}
+
+            {/* Tracker Overlay */}
+            <div className="absolute inset-0 pointer-events-none z-10 overflow-hidden">
+              {mockTrackers.map((t) => {
+                // Interpolate position based on keyframes and currentTime
+                let currentX = t.keyframes[0].x;
+                let currentY = t.keyframes[0].y;
+                
+                for (let i = 0; i < t.keyframes.length - 1; i++) {
+                  const k1 = t.keyframes[i];
+                  const k2 = t.keyframes[i+1];
+                  if (currentTime >= k1.time && currentTime <= k2.time) {
+                    const progress = (currentTime - k1.time) / (k2.time - k1.time);
+                    currentX = k1.x + (k2.x - k1.x) * progress;
+                    currentY = k1.y + (k2.y - k1.y) * progress;
+                    break;
+                  } else if (currentTime > k2.time) {
+                    currentX = k2.x;
+                    currentY = k2.y;
+                  }
+                }
+
+                return (
+                  <div 
+                    key={t.id}
+                    className="absolute pointer-events-auto group/tracker cursor-pointer flex flex-col items-center justify-end"
+                    style={{ left: `${currentX}%`, top: `${currentY}%`, transform: 'translate(-50%, -100%)', width: '48px', height: '100px' }}
+                  >
+                    {/* Info Card (shown on hover) */}
+                    <div className="opacity-0 group-hover/tracker:opacity-100 transition-all absolute bottom-full mb-1 bg-black/80 backdrop-blur-md border border-white/10 rounded-lg p-2.5 flex flex-col gap-1 w-32 shadow-2xl pointer-events-none z-20">
+                      <span className="text-[11px] font-bold text-white">{t.name}</span>
+                      <span className="text-[9px] text-muted-foreground uppercase font-semibold tracking-wider">{t.team}</span>
+                      <div className="flex items-center gap-1 mt-1 bg-white/5 rounded px-1.5 py-0.5 w-fit border border-white/5">
+                         <Flame className="w-3 h-3 text-amber-400" />
+                         <span className="text-[10px] font-mono font-bold text-amber-400">{t.speed}</span>
+                      </div>
+                    </div>
+
+                    {/* Diamond Marker */}
+                    <div className={`w-2.5 h-2.5 rotate-45 mb-1.5 transition-transform group-hover/tracker:scale-125 ${t.color}`} />
+
+                    {/* Bounding Box Simulation */}
+                    <div className="w-full flex-1 border-2 border-primary/50 rounded-sm opacity-0 group-hover/tracker:opacity-100 transition-opacity" />
+                  </div>
+                );
+              })}
+            </div>
 
             {/* AI Overlay Badge */}
             <div className="absolute top-4 left-4 z-20 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-black/70 backdrop-blur-md border border-white/10">
@@ -374,7 +500,7 @@ export default function MatchDetailPage() {
         </div>
 
         {/* Right Col: Tactical Radar + Tabbed Intelligence Panel */}
-        <div className="flex flex-col gap-5 h-full min-h-0">
+        <div className="lg:col-span-2 flex flex-col gap-5 min-h-0">
           {/* Tactical 2D Pitch Radar Canvas */}
           <div className="glass-panel rounded-2xl p-4 border border-border/50 flex flex-col shrink-0">
             <div className="flex items-center justify-between mb-3">
@@ -448,38 +574,38 @@ export default function MatchDetailPage() {
           </div>
 
           {/* Bottom Tabs Panel */}
-          <div className="glass-panel rounded-2xl p-4 border border-border/50 flex-1 flex flex-col overflow-hidden min-h-0">
+          <div className="glass-panel rounded-2xl p-4 border border-border/50 flex flex-col overflow-hidden h-[380px] shrink-0">
             {/* Tabs Header */}
             <div className="flex items-center gap-2 border-b border-white/10 pb-3 mb-3 shrink-0">
               <button
                 onClick={() => setActiveTab("players")}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 ${
+                className={`whitespace-nowrap px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 ${
                   activeTab === "players"
                     ? "bg-primary text-white shadow-lg shadow-primary/25"
                     : "text-muted-foreground hover:text-white hover:bg-white/5"
                 }`}
               >
                 <Users className="w-3.5 h-3.5" />
-                Tracked Players ({players.length})
+                Tracked Players ({displayPlayers.length})
               </button>
               <button
                 onClick={() => setActiveTab("events")}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 ${
+                className={`whitespace-nowrap px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 ${
                   activeTab === "events"
                     ? "bg-primary text-white shadow-lg shadow-primary/25"
                     : "text-muted-foreground hover:text-white hover:bg-white/5"
                 }`}
               >
                 <Clock className="w-3.5 h-3.5" />
-                Events ({events.length})
+                Events ({displayEvents.length})
               </button>
             </div>
 
             {/* Tab Contents */}
             <div className="flex-1 overflow-y-auto space-y-2.5 pr-1 min-h-0">
               {activeTab === "players" ? (
-                players.length > 0 ? (
-                  players.map((p) => {
+                displayPlayers.length > 0 ? (
+                  displayPlayers.map((p) => {
                     const isTeamA = p.team_id === 0;
                     return (
                       <div
@@ -511,8 +637,8 @@ export default function MatchDetailPage() {
                   </div>
                 )
               ) : (
-                events.length > 0 ? (
-                  events.map((ev) => (
+                displayEvents.length > 0 ? (
+                  displayEvents.map((ev) => (
                     <div
                       key={ev.id}
                       className="p-3 rounded-xl bg-white/[0.03] border border-white/5 flex items-start gap-3 text-xs"

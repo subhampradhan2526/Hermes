@@ -118,7 +118,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <Link href="/" className="flex items-center gap-2">
             <Activity className="text-primary w-6 h-6" />
             <span className="font-bold tracking-tight">
-              Footy<span className="text-primary">Vision</span>
+              Her<span className="text-primary">mes</span>
             </span>
           </Link>
         </div>
